@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 import asyncio
+import base64
 from dataclasses import asdict, dataclass
 from ipaddress import IPv4Address
 import json
@@ -9,6 +10,7 @@ import struct
 from typing import NamedTuple, Optional, Self, Type
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 G = 0x3FB32C9B73134D0B2E77506660EDBD484CA7B18F21EF205407F4793A1A0BA12510DBC15077BE463FFF4FED4AAC0BB555BE3A6C1B0C6B47B1BC3773BF7E8C6F62901228F8C28CBB18A55AE31341000A650196F931C77A57F2DDF463E5E9EC144B777DE62AAAB8A8628AC376D282D6ED3864E67982428EBC831D14348F6F2F9193B5045AF2767164E1DFC967C1FB3F2E55A4BD1BFFE83B9C80D052B985D182EA0ADB2A3B7313D3FE14C8484B1E052588B9B7D2BBD2DF016199ECD06E1557CD0915B3353BBB64E0EC377FD028370DF92B52C7891428CDC67EB6184B523D1DB246C32F63078490F00EF8D647D148D47954515E2327CFEF98C582664B4C0F6CC41659
 P = 0x87A8E61DB4B6663CFFBBD19C651959998CEEF608660DD0F25D2CEED4435E3B00E00DF8F1D61957D4FAF7DF4561B2AA3016C3D91134096FAA3BF4296D830E9A7C209E0C6497517ABD5A8A9D306BCF67ED91F9E6725B4758C022E0B1EF4275BF7B6C5BFC11D45F9088B941F54EB1E59BB8BC39A0BF12307F5C4FDB70C581B23F76B63ACAE1CAA6B7902D52526735488A0EF13C6D9A51BFA4AB3AD8347796524D8EF6A167B5A41825D967E144E5140564251CCACB83E6B486F6B3CA3F7971506026C0B857F689962856DED4010ABD0BE621C3A3960A54E710C375F26375D7014103A4B54330C198AF126116D2276E11715F693877FAD7EF09CADB094AE91E1A1597
@@ -20,6 +22,26 @@ def hkdf(n: int) -> bytes:
     return HKDF(
         algorithm=hashes.SHA256(), length=32, salt=b"salt", info=b"info"
     ).derive(n.to_bytes(2048))
+
+
+def ae(k: bytes, p: bytes) -> bytes:
+    aesgcm = AESGCM(k)
+    nonce = os.urandom(12)
+    return nonce + aesgcm.encrypt(nonce, p, None)
+
+
+def ad(k: bytes, nc: bytes) -> bytes:
+    aesgcm = AESGCM(k)
+    nonce, ciphertext = nc[:12], nc[12:]
+    return aesgcm.decrypt(nonce, ciphertext, None)
+
+
+def b64(b: bytes) -> str:
+    return base64.b64encode(b).decode()
+
+
+def u64(b64: str) -> bytes:
+    return base64.b64decode(b64)
 
 
 class Host(NamedTuple):
@@ -108,6 +130,24 @@ class Auth4Message(DataclassMessage, Message):
     ka_c2: str
 
 
+class ClientsRequestMessage(Message):
+    type_str = "clireq"
+
+
+@dataclass
+class ClientsResponseMessage(DataclassMessage, Message):
+    type_str = "clires"
+
+    clients: dict[str, str]
+
+
+@dataclass
+class EncryptedMessage(DataclassMessage, Message):
+    type_str = "encr"
+
+    data: bytes
+
+
 class Node:
     TYPE_LENGTH_FMT = "8sI"
     TYPE_LENGTH_FMT_SIZE = struct.calcsize(TYPE_LENGTH_FMT)
@@ -115,31 +155,44 @@ class Node:
     def __init__(self, name: str):
         self.logger = logging.getLogger(name)
 
-    async def receive_msg(self, reader: asyncio.StreamReader) -> Optional[Message]:
-        try:
-            msg_type: str
-            msg_length: int
-            msg_type, msg_length = struct.unpack(
-                self.TYPE_LENGTH_FMT,
-                await reader.readexactly(self.TYPE_LENGTH_FMT_SIZE),
-            )
-            msg_bytes = await reader.readexactly(msg_length)
-            msg_json = json.loads(msg_bytes)
-            return Message.MESSAGE_CLASSES[
-                msg_type.rstrip(b"\0").decode("utf-8")
-            ].deserialize(msg_json)
-        except Exception as e:
-            self.logger.exception(e)
-            return None
+    def unpack_msg(self, b: bytes) -> Message:
+        msg_type, _ = struct.unpack(
+            self.TYPE_LENGTH_FMT,
+            b[: self.TYPE_LENGTH_FMT_SIZE],
+        )
+        msg_json = json.loads(b[self.TYPE_LENGTH_FMT_SIZE :])
+        return Message.MESSAGE_CLASSES[
+            msg_type.rstrip(b"\0").decode("utf-8")
+        ].deserialize(msg_json)
 
-    def send_msg(self, writer: asyncio.StreamWriter, message: Message):
+    def pack_msg(self, message: Message) -> bytes:
         ser_msg = json.dumps(message.serialize()).encode()
-        out = (
+        return (
             struct.pack(self.TYPE_LENGTH_FMT, message.type_str.encode(), len(ser_msg))
             + ser_msg
         )
-        self.logger.info("writing", str(out))
-        writer.write(out)
+
+    def send_msg(self, writer: asyncio.StreamWriter, message: Message):
+        writer.write(self.pack_msg(message))
+
+    async def receive_msg(self, reader: asyncio.StreamReader) -> Message:
+        msg_length: int
+        metadata: bytes = await reader.readexactly(self.TYPE_LENGTH_FMT_SIZE)
+        _, msg_length = struct.unpack(self.TYPE_LENGTH_FMT, metadata)
+        msg_bytes = await reader.readexactly(msg_length)
+        return self.unpack_msg(metadata + msg_bytes)
+
+    def send_msg_encrypted(
+        self, writer: asyncio.StreamWriter, message: Message, key: bytes
+    ):
+        self.send_msg(writer, EncryptedMessage(b64(ae(key, self.pack_msg(message)))))
+
+    async def receive_msg_encrypted(
+        self, reader: asyncio.StreamReader, key: bytes
+    ) -> Message:
+        msg: EncryptedMessage = await self.receive_msg(reader)
+        assert isinstance(msg, EncryptedMessage)
+        return self.unpack_msg(ad(key, u64(msg.data)))
 
 
 class Server(Node):
@@ -147,27 +200,48 @@ class Server(Node):
     def __init__(self, host: Host):
         super().__init__("server")
         self.server = asyncio.start_server(self._client, str(host.address), host.port)
+        self.clients = {}
 
     async def start(self) -> asyncio.Server:
         return await self.server
 
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        print(f"Client acquired {writer.get_extra_info('peername')}")
-        auth1: Auth1Message = await self.receive_msg(reader)
-        assert isinstance(auth1, Auth1Message)
-        b = int.from_bytes(os.urandom(2048 // 8))
-        g_bfw = (pow(G, b, P) + pow(G, PASS[auth1.identity], P)) % P
-        u = int.from_bytes(os.urandom(2048 // 8))
-        c1 = int.from_bytes(os.urandom(2048 // 8))
-        self.send_msg(
-            writer,
-            Auth2Message(g_bfw, u, c1),
-        )
-        print(pow(G, b, P), u)
-        k_a = hkdf(
-            (pow(auth1.dh, b, P) * pow(pow(G, PASS[auth1.identity], P), b * u, P)) % P
-        )
-        print(k_a)
+        identity: Optional[str] = None
+        try:
+            auth1: Auth1Message = await self.receive_msg(reader)
+            assert isinstance(auth1, Auth1Message)
+            b = int.from_bytes(os.urandom(2048 // 8))
+            g_bfw = (pow(G, b, P) + pow(G, PASS[auth1.identity], P)) % P
+            u = int.from_bytes(os.urandom(2048 // 8))
+            c1 = os.urandom(2048 // 8)
+            self.send_msg(
+                writer,
+                Auth2Message(g_bfw, u, b64(c1)),
+            )
+            k_a = hkdf(
+                (pow(auth1.dh, b, P) * pow(pow(G, PASS[auth1.identity], P), b * u, P))
+                % P
+            )
+            auth3: Auth3Message = await self.receive_msg(reader)
+            assert isinstance(auth3, Auth3Message)
+            assert ad(k_a, u64(auth3.ka_c1)) == c1
+            self.send_msg(writer, Auth4Message(b64(ae(k_a, u64(auth3.c2)))))
+
+            self.clients[identity := auth1.identity] = writer.get_extra_info("peername")
+            self.logger.info(f"Authenticated to client {identity}")
+
+            while (message := await self.receive_msg_encrypted(reader, k_a)) != None:
+                match message:
+                    case ClientsRequestMessage():
+                        self.send_msg_encrypted(
+                            writer, ClientsResponseMessage(self.clients), k_a
+                        )
+                    case _:
+                        raise Exception("unexpected message: ", repr(message))
+        except Exception as e:
+            if identity:
+                del self.clients[identity]
+            self.logger.exception(e)
 
 
 class Client(Node):
@@ -180,12 +254,31 @@ class Client(Node):
             str(self.host.address), self.host.port
         )
         a = int.from_bytes(os.urandom(2048 // 8))
-        self.send_msg(self.writer, Auth1Message("A", a))
+        self.send_msg(self.writer, Auth1Message("A", pow(G, a, P)))
         auth2: Auth2Message = await self.receive_msg(self.reader)
+        assert isinstance(auth2, Auth2Message)
         g_b = (auth2.dh - pow(G, PASS["A"], P)) % P
-        print(g_b, auth2.u)
         k_a = hkdf(pow(g_b, (a + auth2.u * PASS["A"]), P))
-        print(k_a)
+        c2 = os.urandom(2048 // 8)
+        self.send_msg(self.writer, Auth3Message(b64(ae(k_a, u64(auth2.c1))), b64(c2)))
+        auth4: Auth4Message = await self.receive_msg(self.reader)
+        assert isinstance(auth4, Auth4Message)
+        assert ad(k_a, u64(auth4.ka_c2)) == c2
+        self.logger.info("Authenticated to server")
+
+        while True:
+            cmd = input()
+            match cmd:
+                case "list":
+                    self.send_msg_encrypted(self.writer, ClientsRequestMessage(), k_a)
+                    resp: ClientsResponseMessage = await self.receive_msg_encrypted(
+                        self.reader, k_a
+                    )
+                    assert isinstance(resp, ClientsResponseMessage)
+                    for user, host in resp.clients.items():
+                        print(user, ":", host)
+                case _:
+                    raise Exception(f"unexpected command: {cmd}")
 
 
 async def client_main(args):
