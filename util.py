@@ -22,7 +22,7 @@ def scrypt(salt: bytes, pwd: bytes) -> bytes:
 def hkdf(n: int) -> bytes:
     return HKDF(
         algorithm=hashes.SHA256(), length=32, salt=b"salt", info=b"info"
-    ).derive(n.to_bytes(2048))
+    ).derive(n.to_bytes(2048, "big"))
 
 
 def ae(k: bytes, p: bytes) -> bytes:

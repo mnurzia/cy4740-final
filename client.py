@@ -31,7 +31,7 @@ class Client(Node):
         try:
             pauth1: PeerAuth1Message = await self.receive_msg(reader)
             assert isinstance(pauth1, PeerAuth1Message)
-            n_b = int.from_bytes(os.urandom(16))
+            n_b = int.from_bytes(os.urandom(16), "big")
             self.send_msg_encrypted(
                 self.writer,
                 PeerAuth2Message(
@@ -68,11 +68,11 @@ class Client(Node):
         self.reader, self.writer = await asyncio.open_connection(
             str(self.host.address), self.host.port
         )
-        a = int.from_bytes(os.urandom(2048 // 8))
+        a = int.from_bytes(os.urandom(2048 // 8), "big")
         self.send_msg(self.writer, Auth1Message("A", pow(G, a, P)))
         auth2: Auth2Message = await self.receive_msg(self.reader)
         assert isinstance(auth2, Auth2Message)
-        f_w = int.from_bytes(scrypt(auth2.salt, pwd.encode()))
+        f_w = int.from_bytes(scrypt(auth2.salt, pwd.encode()), "big")
         g_b = (auth2.dh - pow(G, f_w, P)) % P
         k_a = hkdf(pow(g_b, a + auth2.u * f_w, P))
         c2 = os.urandom(2048 // 8)
@@ -107,8 +107,8 @@ class Client(Node):
                         peer_read, peer_write = await asyncio.open_connection(
                             self.clients[peer][0], PORT
                         )
-                        n_a = int.from_bytes(os.urandom(16))
-                        n_c = int.from_bytes(os.urandom(16))
+                        n_a = int.from_bytes(os.urandom(16), "big")
+                        n_c = int.from_bytes(os.urandom(16), "big")
                         self.send_msg(
                             peer_write,
                             PeerAuth1Message(

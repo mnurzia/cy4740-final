@@ -8,7 +8,7 @@ import logging
 import os
 import struct
 import sys
-from typing import NamedTuple, Optional, Self, Type
+from typing import NamedTuple, Optional, Type
 
 from message import *
 from util import *

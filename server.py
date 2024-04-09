@@ -23,11 +23,11 @@ class Server(Node):
         try:
             auth1: Auth1Message = await self.receive_msg(reader)
             assert isinstance(auth1, Auth1Message)
-            b = int.from_bytes(os.urandom(2048 // 8))
+            b = int.from_bytes(os.urandom(2048 // 8), "big")
             salt, f_w = self.pdb[auth1.identity]
-            f_w = int.from_bytes(f_w)
+            f_w = int.from_bytes(f_w, "big")
             g_bfw = (pow(G, b, P) + pow(G, f_w, P)) % P
-            u = int.from_bytes(os.urandom(2048 // 8))
+            u = int.from_bytes(os.urandom(2048 // 8), "big")
             c1 = os.urandom(2048 // 8)
             self.send_msg(
                 writer,
