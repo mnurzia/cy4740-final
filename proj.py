@@ -1,4 +1,4 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, FileType
 import asyncio
 import base64
 from dataclasses import asdict, dataclass
@@ -11,6 +11,7 @@ import sys
 from typing import NamedTuple, Optional, Self, Type
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 G = 0x3FB32C9B73134D0B2E77506660EDBD484CA7B18F21EF205407F4793A1A0BA12510DBC15077BE463FFF4FED4AAC0BB555BE3A6C1B0C6B47B1BC3773BF7E8C6F62901228F8C28CBB18A55AE31341000A650196F931C77A57F2DDF463E5E9EC144B777DE62AAAB8A8628AC376D282D6ED3864E67982428EBC831D14348F6F2F9193B5045AF2767164E1DFC967C1FB3F2E55A4BD1BFFE83B9C80D052B985D182EA0ADB2A3B7313D3FE14C8484B1E052588B9B7D2BBD2DF016199ECD06E1557CD0915B3353BBB64E0EC377FD028370DF92B52C7891428CDC67EB6184B523D1DB246C32F63078490F00EF8D647D148D47954515E2327CFEF98C582664B4C0F6CC41659
@@ -18,6 +19,11 @@ P = 0x87A8E61DB4B6663CFFBBD19C651959998CEEF608660DD0F25D2CEED4435E3B00E00DF8F1D6
 
 PASS = {"A": 22, "B": 44}
 PORT = 25154
+
+
+def scrypt(salt: bytes, pwd: bytes) -> bytes:
+    kdf = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1)
+    return kdf.derive(pwd)
 
 
 def hkdf(n: int) -> bytes:
@@ -72,9 +78,6 @@ class Message:
 
     @classmethod
     def __init_subclass__(subcls, **kwargs):
-        """
-        Register subclasses so that we can decode packets using from_json.
-        """
         super().__init_subclass__(**kwargs)
         Message.MESSAGE_CLASSES[subcls.type_str] = subcls
 
@@ -86,7 +89,7 @@ class Message:
         return cls()
 
     @classmethod
-    def unpack_msg(cls, b: bytes) -> Self:
+    def unpack(cls, b: bytes) -> Self:
         msg_type, _ = struct.unpack(
             cls.TYPE_LENGTH_FMT,
             b[: cls.TYPE_LENGTH_FMT_SIZE],
@@ -97,7 +100,7 @@ class Message:
         ].deserialize(msg_json)
 
     @classmethod
-    def pack_msg(cls, message: Self) -> bytes:
+    def pack(cls, message: Self) -> bytes:
         ser_msg = json.dumps(message.serialize()).encode()
         return (
             struct.pack(cls.TYPE_LENGTH_FMT, message.type_str.encode(), len(ser_msg))
@@ -108,9 +111,6 @@ class Message:
 class DataclassMessage:
     @classmethod
     def __init_subclass__(subcls, **kwargs):
-        """
-        Register subclasses so that we can decode packets using from_json.
-        """
         super().__init_subclass__(**kwargs)
 
     def serialize(self) -> dict:
@@ -172,10 +172,10 @@ class EncryptedMessage(DataclassMessage, Message):
 
     @classmethod
     def encrypt(cls, k: bytes, msg: Message) -> Self:
-        return cls(b64(ae(k, Message.pack_msg(msg))))
+        return cls(b64(ae(k, Message.pack(msg))))
 
     def decrypt(self, k: bytes) -> Message:
-        return Message.unpack_msg(ad(k, u64(self.data)))
+        return Message.unpack(ad(k, u64(self.data)))
 
 
 @dataclass
@@ -245,14 +245,14 @@ class Node:
         self.logger = logging.getLogger(name)
 
     def send_msg(self, writer: asyncio.StreamWriter, message: Message):
-        writer.write(Message.pack_msg(message))
+        writer.write(Message.pack(message))
 
     async def receive_msg(self, reader: asyncio.StreamReader) -> Message:
         msg_length: int
         metadata: bytes = await reader.readexactly(Message.TYPE_LENGTH_FMT_SIZE)
         _, msg_length = struct.unpack(Message.TYPE_LENGTH_FMT, metadata)
         msg_bytes = await reader.readexactly(msg_length)
-        return Message.unpack_msg(metadata + msg_bytes)
+        return Message.unpack(metadata + msg_bytes)
 
     def send_msg_encrypted(
         self, writer: asyncio.StreamWriter, message: Message, key: bytes
@@ -311,12 +311,12 @@ class Server(Node):
                             writer, ClientsResponseMessage(self.clients), k_a
                         )
                     case PeerAuth2Message(a, b, k_a1, k_b1):
-                        a1: AuthReqMessage = Message.unpack_msg(u64(k_a1)).decrypt(
+                        a1: AuthReqMessage = Message.unpack(u64(k_a1)).decrypt(
                             self.keys[a]
                         )
                         assert isinstance(a1, AuthReqMessage)
                         assert a1.a == a and a1.b == b
-                        b1: AuthReqMessage = Message.unpack_msg(u64(k_b1)).decrypt(
+                        b1: AuthReqMessage = Message.unpack(u64(k_b1)).decrypt(
                             self.keys[b]
                         )
                         assert isinstance(b1, AuthReqMessage)
@@ -328,7 +328,7 @@ class Server(Node):
                             PeerAuth3Message(
                                 a1.n_2,
                                 b64(
-                                    Message.pack_msg(
+                                    Message.pack(
                                         EncryptedMessage.encrypt(
                                             self.keys[a],
                                             AuthTicketMessage(a1.n_1, k_ab),
@@ -336,7 +336,7 @@ class Server(Node):
                                     )
                                 ),
                                 b64(
-                                    EncryptedMessage.pack_msg(
+                                    EncryptedMessage.pack(
                                         EncryptedMessage.encrypt(
                                             self.keys[b],
                                             AuthTicketMessage(b1.n_1, k_ab),
@@ -386,7 +386,7 @@ class Client(Node):
                     self.me,
                     pauth1.k_a1,
                     b64(
-                        Message.pack_msg(
+                        Message.pack(
                             EncryptedMessage.encrypt(
                                 self.k_a,
                                 AuthReqMessage(n_b, pauth1.n_c, pauth1.a, self.me),
@@ -401,7 +401,7 @@ class Client(Node):
             )
             assert pauth3.n_c == pauth1.n_c
             assert isinstance(pauth3, PeerAuth3Message)
-            tick_b: AuthTicketMessage = Message.unpack_msg(u64(pauth3.k_b2)).decrypt(
+            tick_b: AuthTicketMessage = Message.unpack(u64(pauth3.k_b2)).decrypt(
                 self.k_a
             )
             assert isinstance(tick_b, AuthTicketMessage)
@@ -466,7 +466,7 @@ class Client(Node):
                                 self.me,
                                 peer,
                                 b64(
-                                    Message.pack_msg(
+                                    Message.pack(
                                         EncryptedMessage.encrypt(
                                             self.k_a,
                                             AuthReqMessage(n_a, n_c, self.me, peer),
@@ -477,7 +477,7 @@ class Client(Node):
                         )
                         pauth4: PeerAuth4Message = await self.receive_msg(peer_read)
                         assert isinstance(pauth4, PeerAuth4Message)
-                        tick_a: AuthTicketMessage = Message.unpack_msg(
+                        tick_a: AuthTicketMessage = Message.unpack(
                             u64(pauth4.k_a2)
                         ).decrypt(self.k_a)
                         assert isinstance(tick_a, AuthTicketMessage)
@@ -511,16 +511,45 @@ async def server_main(args):
     await (await server.start()).serve_forever()
 
 
+def load_pdb(path: str) -> dict[str, tuple[bytes, bytes]]:
+    out = {}
+    with open(path, "r") as f:
+        obj = json.loads(f.read())
+        for id, (salt, pwd) in obj:
+            out[id] = (u64(salt), u64(pwd))
+    return out
+
+
+def save_pdb(path: str, pdb: dict[str, tuple[bytes, bytes]]):
+    out = {id: [b64(salt), b64(pwd)] for id, (salt, pwd) in pdb.items()}
+    with open(path, "w") as f:
+        f.write(json.dumps(out))
+
+
+async def pdb_main(args):
+    pdb = load_pdb(args.pdb)
+    salt = os.urandom(16)
+    pdb[args.id] = (salt, scrypt(salt, args.pwd.encode()))
+    save_pdb(args.pdb, pdb)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(message)s")
     ap = ArgumentParser()
-    ap.add_argument("server_ip", type=IPv4Address)
-    ap.add_argument("server_port", type=int)
+    ap.add_argument("--pdb", type=str, default="pdb.json")
     sc = ap.add_subparsers(required=True)
     client = sc.add_parser("client")
     client.set_defaults(func=client_main)
+    client.add_argument("server_ip", type=IPv4Address)
+    client.add_argument("server_port", type=int)
     client.add_argument("id", type=str)
     server = sc.add_parser("server")
     server.set_defaults(func=server_main)
+    server.add_argument("ip", type=IPv4Address)
+    server.add_argument("port", type=int)
+    pdb = sc.add_parser("pass")
+    pdb.set_defaults(func=pdb_main)
+    pdb.add_argument("id", type=str)
+    pdb.add_argument("pwd", type=str)
     args = ap.parse_args()
     asyncio.run(args.func(args))
