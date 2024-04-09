@@ -73,6 +73,7 @@ class Auth2Message(DataclassMessage, Message):
     dh: int
     u: int
     c1: int
+    salt: str
 
 
 @dataclass

@@ -1,5 +1,6 @@
 import asyncio
 from typing import Optional
+from passdb import load_pdb
 from util import *
 from message import *
 from node import *
@@ -7,11 +8,12 @@ from node import *
 
 class Server(Node):
 
-    def __init__(self, host: Host):
+    def __init__(self, host: Host, pdb: str):
         super().__init__("server")
         self.server = asyncio.start_server(self._client, str(host.address), host.port)
         self.clients = {}
         self.keys = {}
+        self.pdb = load_pdb(pdb)
 
     async def start(self) -> asyncio.Server:
         return await self.server
@@ -22,17 +24,16 @@ class Server(Node):
             auth1: Auth1Message = await self.receive_msg(reader)
             assert isinstance(auth1, Auth1Message)
             b = int.from_bytes(os.urandom(2048 // 8))
-            g_bfw = (pow(G, b, P) + pow(G, PASS[auth1.identity], P)) % P
+            salt, f_w = self.pdb[auth1.identity]
+            f_w = int.from_bytes(f_w)
+            g_bfw = (pow(G, b, P) + pow(G, f_w, P)) % P
             u = int.from_bytes(os.urandom(2048 // 8))
             c1 = os.urandom(2048 // 8)
             self.send_msg(
                 writer,
-                Auth2Message(g_bfw, u, b64(c1)),
+                Auth2Message(g_bfw, u, b64(c1), b64(salt)),
             )
-            k_a = hkdf(
-                (pow(auth1.dh, b, P) * pow(pow(G, PASS[auth1.identity], P), b * u, P))
-                % P
-            )
+            k_a = hkdf((pow(auth1.dh, b, P) * pow(pow(G, f_w, P), b * u, P)) % P)
             auth3: Auth3Message = await self.receive_msg(reader)
             assert isinstance(auth3, Auth3Message)
             assert ad(k_a, u64(auth3.ka_c1)) == c1

@@ -21,9 +21,11 @@ class Client(Node):
         await loop.connect_read_pipe(lambda: protocol, sys.stdin)
         return reader
 
-    async def start(self):
+    async def start(self, pwd: str):
         self.peer = asyncio.start_server(self._peer, str(self.host.address), 25154)
-        return await asyncio.gather((await self.peer).serve_forever(), self._server())
+        return await asyncio.gather(
+            (await self.peer).serve_forever(), self._server(pwd)
+        )
 
     async def _peer(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         try:
@@ -66,7 +68,7 @@ class Client(Node):
         except Exception as e:
             self.logger.exception(e)
 
-    async def _server(self):
+    async def _server(self, pwd: str):
         self.reader, self.writer = await asyncio.open_connection(
             str(self.host.address), self.host.port
         )
@@ -74,8 +76,9 @@ class Client(Node):
         self.send_msg(self.writer, Auth1Message("A", pow(G, a, P)))
         auth2: Auth2Message = await self.receive_msg(self.reader)
         assert isinstance(auth2, Auth2Message)
-        g_b = (auth2.dh - pow(G, PASS["A"], P)) % P
-        k_a = hkdf(pow(g_b, a + auth2.u * PASS["A"], P))
+        f_w = int.from_bytes(scrypt(u64(auth2.salt), pwd.encode()))
+        g_b = (auth2.dh - pow(G, f_w, P)) % P
+        k_a = hkdf(pow(g_b, a + auth2.u * f_w, P))
         c2 = os.urandom(2048 // 8)
         self.send_msg(self.writer, Auth3Message(b64(ae(k_a, u64(auth2.c1))), b64(c2)))
         auth4: Auth4Message = await self.receive_msg(self.reader)

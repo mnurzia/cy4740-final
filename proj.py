@@ -14,31 +14,17 @@ from message import *
 from util import *
 from client import *
 from server import *
+from passdb import *
 
 
 async def client_main(args):
     client = Client(Host(args.server_ip, args.server_port), args.id)
-    await client.start()
+    await client.start(args.pwd)
 
 
 async def server_main(args):
-    server = Server(Host(args.ip, args.port))
+    server = Server(Host(args.ip, args.port), args.pdb)
     await (await server.start()).serve_forever()
-
-
-def load_pdb(path: str) -> dict[str, tuple[bytes, bytes]]:
-    out = {}
-    with open(path, "r") as f:
-        obj = json.loads(f.read())
-        for id, (salt, pwd) in obj:
-            out[id] = (u64(salt), u64(pwd))
-    return out
-
-
-def save_pdb(path: str, pdb: dict[str, tuple[bytes, bytes]]):
-    out = {id: [b64(salt), b64(pwd)] for id, (salt, pwd) in pdb.items()}
-    with open(path, "w") as f:
-        f.write(json.dumps(out))
 
 
 async def pdb_main(args):
@@ -58,6 +44,7 @@ if __name__ == "__main__":
     client.add_argument("server_ip", type=IPv4Address)
     client.add_argument("server_port", type=int)
     client.add_argument("id", type=str)
+    client.add_argument("pwd", type=str)
     server = sc.add_parser("server")
     server.set_defaults(func=server_main)
     server.add_argument("ip", type=IPv4Address)
