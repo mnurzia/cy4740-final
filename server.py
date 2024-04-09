@@ -31,13 +31,13 @@ class Server(Node):
             c1 = os.urandom(2048 // 8)
             self.send_msg(
                 writer,
-                Auth2Message(g_bfw, u, b64(c1), b64(salt)),
+                Auth2Message(g_bfw, u, c1, salt),
             )
             k_a = hkdf((pow(auth1.dh, b, P) * pow(pow(G, f_w, P), b * u, P)) % P)
             auth3: Auth3Message = await self.receive_msg(reader)
             assert isinstance(auth3, Auth3Message)
-            assert ad(k_a, u64(auth3.ka_c1)) == c1
-            self.send_msg(writer, Auth4Message(b64(ae(k_a, u64(auth3.c2)))))
+            assert ad(k_a, auth3.ka_c1) == c1
+            self.send_msg(writer, Auth4Message(ae(k_a, auth3.c2)))
 
             self.clients[identity := auth1.identity] = writer.get_extra_info("peername")
             self.keys[identity] = k_a
@@ -50,36 +50,28 @@ class Server(Node):
                             writer, ClientsResponseMessage(self.clients), k_a
                         )
                     case PeerAuth2Message(a, b, k_a1, k_b1):
-                        a1: AuthReqMessage = Message.unpack(u64(k_a1)).decrypt(
-                            self.keys[a]
-                        )
+                        a1: AuthReqMessage = Message.unpack(k_a1).decrypt(self.keys[a])
                         assert isinstance(a1, AuthReqMessage)
                         assert a1.a == a and a1.b == b
-                        b1: AuthReqMessage = Message.unpack(u64(k_b1)).decrypt(
-                            self.keys[b]
-                        )
+                        b1: AuthReqMessage = Message.unpack(k_b1).decrypt(self.keys[b])
                         assert isinstance(b1, AuthReqMessage)
                         assert b1.a == a and b1.b == b
                         assert a1.n_2 == b1.n_2
-                        k_ab: bytes = b64(os.urandom(32))
+                        k_ab: bytes = os.urandom(32)
                         self.send_msg_encrypted(
                             writer,
                             PeerAuth3Message(
                                 a1.n_2,
-                                b64(
-                                    Message.pack(
-                                        EncryptedMessage.encrypt(
-                                            self.keys[a],
-                                            AuthTicketMessage(a1.n_1, k_ab),
-                                        )
+                                Message.pack(
+                                    EncryptedMessage.encrypt(
+                                        self.keys[a],
+                                        AuthTicketMessage(a1.n_1, k_ab),
                                     )
                                 ),
-                                b64(
-                                    EncryptedMessage.pack(
-                                        EncryptedMessage.encrypt(
-                                            self.keys[b],
-                                            AuthTicketMessage(b1.n_1, k_ab),
-                                        )
+                                EncryptedMessage.pack(
+                                    EncryptedMessage.encrypt(
+                                        self.keys[b],
+                                        AuthTicketMessage(b1.n_1, k_ab),
                                     )
                                 ),
                             ),
