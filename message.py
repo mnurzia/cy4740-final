@@ -1,13 +1,13 @@
 from dataclasses import asdict, dataclass
 import json
 import struct
-from typing import Self, Type
+from typing import Type
 
 from util import *
 
 
 class Message:
-    MESSAGE_CLASSES: dict[str, Type[Self]] = {}
+    MESSAGE_CLASSES: dict[str] = {}
     TYPE_LENGTH_FMT = "8sI"
     TYPE_LENGTH_FMT_SIZE = struct.calcsize(TYPE_LENGTH_FMT)
 
@@ -22,11 +22,11 @@ class Message:
         return {}
 
     @classmethod
-    def deserialize(cls, data: dict) -> Self:
+    def deserialize(cls, data: dict):
         return cls()
 
     @classmethod
-    def unpack(cls, b: bytes) -> Self:
+    def unpack(cls, b: bytes):
         msg_type, _ = struct.unpack(
             cls.TYPE_LENGTH_FMT,
             b[: cls.TYPE_LENGTH_FMT_SIZE],
@@ -37,7 +37,7 @@ class Message:
         ].deserialize(msg_json)
 
     @classmethod
-    def pack(cls, message: Self) -> bytes:
+    def pack(cls, message) -> bytes:
         ser_msg = json.dumps(message.serialize()).encode()
         return (
             struct.pack(cls.TYPE_LENGTH_FMT, message.type_str.encode(), len(ser_msg))
@@ -54,7 +54,7 @@ class DataclassMessage:
         return asdict(self)
 
     @classmethod
-    def deserialize(cls, data: dict) -> Self:
+    def deserialize(cls, data: dict):
         return cls(**data)
 
 
@@ -89,6 +89,12 @@ class Auth4Message(DataclassMessage, Message):
 
     ka_c2: str
 
+@dataclass
+class PeerPortMessage(DataclassMessage, Message):
+    type_str = "peerport"
+
+    peer_port: int
+
 
 class ClientsRequestMessage(Message):
     type_str = "clireq"
@@ -108,7 +114,7 @@ class EncryptedMessage(DataclassMessage, Message):
     data: str
 
     @classmethod
-    def encrypt(cls, k: bytes, msg: Message) -> Self:
+    def encrypt(cls, k: bytes, msg: Message):
         return cls(b64(ae(k, Message.pack(msg))))
 
     def decrypt(self, k: bytes) -> Message:
