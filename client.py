@@ -2,6 +2,7 @@ import sys
 from message import *
 from util import *
 from node import *
+import random
 
 PORT = 25154
 
@@ -10,7 +11,8 @@ class Client(Node):
     def __init__(self, host: Host, id: str):
         super().__init__("client")
         self.host = host
-        self.k_a: bytes = b""
+        self.port = random.randint(1024, 5000)
+        self.client_key: bytes = b""
         self.clients = {}
         self.me: str = id
 
@@ -22,65 +24,74 @@ class Client(Node):
         return reader
 
     async def start(self, pwd: str):
-        self.peer = asyncio.start_server(self._peer, str(self.host.address), 25154)
+        self.peer = asyncio.start_server(self._peer, str(self.host.address), self.port)
         return await asyncio.gather(
             (await self.peer).serve_forever(), self._server(pwd)
         )
 
-    async def _peer(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def _peer(self, peer_reader: asyncio.StreamReader, peer_writer: asyncio.StreamWriter):
         try:
-            pauth1: PeerAuth1Message = await self.receive_msg(reader)
-            assert isinstance(pauth1, PeerAuth1Message)
-            n_b = int.from_bytes(os.urandom(16), "big")
+            peer_init_comm: PeerAuth1Message = await self.receive_msg(peer_reader)
+            assert isinstance(peer_init_comm, PeerAuth1Message)
+            n_receiver = int.from_bytes(os.urandom(16), "big")
             self.send_msg_encrypted(
-                self.writer,
+                self.server_writer,
                 PeerAuth2Message(
-                    pauth1.a,
+                    peer_init_comm.sender,
                     self.me,
-                    pauth1.k_a1,
+                    peer_init_comm.auth_sender,
                     Message.pack(
                         EncryptedMessage.encrypt(
-                            self.k_a,
-                            AuthReqMessage(n_b, pauth1.n_c, pauth1.a, self.me),
+                            self.client_key,
+                            AuthReqMessage(n_receiver, peer_init_comm.n_common, peer_init_comm.sender, self.me),
                         )
                     ),
                 ),
-                self.k_a,
+                self.client_key,
             )
-            pauth3: PeerAuth3Message = await self.receive_msg_encrypted(
-                self.reader, self.k_a
+
+            session_keys: PeerAuth3Message = await self.receive_msg_encrypted(
+                self.server_reader, self.client_key
             )
-            assert pauth3.n_c == pauth1.n_c
-            assert isinstance(pauth3, PeerAuth3Message)
-            tick_b: AuthTicketMessage = Message.unpack(pauth3.k_b2).decrypt(self.k_a)
-            assert isinstance(tick_b, AuthTicketMessage)
-            assert tick_b.n_1 == n_b
-            k_ab = tick_b.k_ab
-            self.send_msg(writer, PeerAuth4Message(pauth3.k_a2))
-            pauth5: PeerAuth5Message = await self.receive_msg(reader)
-            assert isinstance(pauth5, PeerAuth5Message)
-            print(f"message from {pauth1.a}: {ad(k_ab, pauth5.k_abmsg).decode()}")
+
+            assert session_keys.n_common == peer_init_comm.n_common
+            assert isinstance(session_keys, PeerAuth3Message)
+
+            tick_recv: AuthTicketMessage = Message.unpack(session_keys.receiver_session).decrypt(self.client_key)
+            assert isinstance(tick_recv, AuthTicketMessage)
+            assert tick_recv.n_client == n_receiver
+
+            session_key = tick_recv.session_key
+
+            self.send_msg(peer_writer, PeerAuth4Message(session_keys.sender_session))
+
+            peer_cipher: PeerAuth5Message = await self.receive_msg(peer_reader)
+            assert isinstance(peer_cipher, PeerAuth5Message)
+
+            print(f"message from {peer_init_comm.sender}: {ad(session_key, peer_cipher.cipher).decode()}")
 
         except Exception as e:
             self.logger.exception(e)
 
     async def _server(self, pwd: str):
-        self.reader, self.writer = await asyncio.open_connection(
+        self.server_reader, self.server_writer = await asyncio.open_connection(
             str(self.host.address), self.host.port
         )
         a = int.from_bytes(os.urandom(2048 // 8), "big")
-        self.send_msg(self.writer, Auth1Message("A", pow(G, a, P)))
-        auth2: Auth2Message = await self.receive_msg(self.reader)
+        self.send_msg(self.server_writer, Auth1Message("A", pow(G, a, P)))
+        auth2: Auth2Message = await self.receive_msg(self.server_reader)
         assert isinstance(auth2, Auth2Message)
-        f_w = int.from_bytes(scrypt(auth2.salt, pwd.encode()), "big")
-        g_b = (auth2.dh - pow(G, f_w, P)) % P
-        k_a = hkdf(pow(g_b, a + auth2.u * f_w, P))
+
+        pw_hash = int.from_bytes(scrypt(auth2.salt, pwd.encode()), "big")
+        g_b = (auth2.dh_masked_pw - pow(G, pw_hash, P)) % P
+        client_key = hkdf(pow(g_b, a + auth2.nonce * pw_hash, P))
         c2 = os.urandom(2048 // 8)
-        self.send_msg(self.writer, Auth3Message(ae(k_a, auth2.c1), c2))
-        auth4: Auth4Message = await self.receive_msg(self.reader)
+        self.send_msg(self.server_writer, Auth3Message(ae(client_key, auth2.challenge_1), c2))
+        auth4: Auth4Message = await self.receive_msg(self.server_reader)
         assert isinstance(auth4, Auth4Message)
-        assert ad(k_a, auth4.ka_c2) == c2
-        self.k_a = k_a
+        assert ad(client_key, auth4.resp_2) == c2
+        self.send_msg_encrypted(self.server_writer, PeerPortMessage(self.port), c2)
+        self.client_key = client_key
         self.logger.info("Authenticated to server")
 
         stdin = await self.connect_stdin()
@@ -91,10 +102,10 @@ class Client(Node):
                 match cmd.split():
                     case ["list"]:
                         self.send_msg_encrypted(
-                            self.writer, ClientsRequestMessage(), self.k_a
+                            self.server_writer, ClientsRequestMessage(), self.client_key
                         )
                         resp: ClientsResponseMessage = await self.receive_msg_encrypted(
-                            self.reader, self.k_a
+                            self.server_reader, self.client_key
                         )
                         assert isinstance(resp, ClientsResponseMessage)
                         self.clients = resp.clients
@@ -104,33 +115,34 @@ class Client(Node):
                         await self._update_clients()
                         if peer not in self.clients:
                             raise Exception(f"peer not found: {peer}")
+                        # TODO: receiev the PORT of the user and use that port for the following part
                         peer_read, peer_write = await asyncio.open_connection(
                             self.clients[peer][0], PORT
                         )
-                        n_a = int.from_bytes(os.urandom(16), "big")
-                        n_c = int.from_bytes(os.urandom(16), "big")
+                        n_sender = int.from_bytes(os.urandom(16), "big")
+                        n_common = int.from_bytes(os.urandom(16), "big")
                         self.send_msg(
                             peer_write,
                             PeerAuth1Message(
-                                n_c,
+                                n_common,
                                 self.me,
                                 peer,
                                 Message.pack(
                                     EncryptedMessage.encrypt(
-                                        self.k_a,
-                                        AuthReqMessage(n_a, n_c, self.me, peer),
+                                        self.client_key,
+                                        AuthReqMessage(n_sender, n_common, self.me, peer),
                                     )
                                 ),
                             ),
                         )
                         pauth4: PeerAuth4Message = await self.receive_msg(peer_read)
                         assert isinstance(pauth4, PeerAuth4Message)
-                        tick_a: AuthTicketMessage = Message.unpack(pauth4.k_a2).decrypt(
-                            self.k_a
+                        tick_a: AuthTicketMessage = Message.unpack(pauth4.sender_session).decrypt(
+                            self.client_key
                         )
                         assert isinstance(tick_a, AuthTicketMessage)
-                        assert tick_a.n_1 == n_a
-                        k_ab = tick_a.k_ab
+                        assert tick_a.n_client == n_sender
+                        k_ab = tick_a.session_key
                         self.send_msg(
                             peer_write,
                             PeerAuth5Message(ae(k_ab, " ".join(msg).encode())),
@@ -141,9 +153,9 @@ class Client(Node):
                 self.logger.exception(e)
 
     async def _update_clients(self):
-        self.send_msg_encrypted(self.writer, ClientsRequestMessage(), self.k_a)
+        self.send_msg_encrypted(self.server_writer, ClientsRequestMessage(), self.client_key)
         resp: ClientsResponseMessage = await self.receive_msg_encrypted(
-            self.reader, self.k_a
+            self.server_reader, self.client_key
         )
         assert isinstance(resp, ClientsResponseMessage)
         self.clients = resp.clients

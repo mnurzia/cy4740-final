@@ -70,16 +70,16 @@ class Auth1Message(DataclassMessage, Message):
     type_str = "auth1"
 
     identity: str
-    dh: int
+    dh_mask: int
 
 
 @dataclass
 class Auth2Message(DataclassMessage, Message):
     type_str = "auth2"
 
-    dh: int
-    u: int
-    c1: bytes
+    dh_masked_pw: int
+    nonce: int
+    challenge_1: bytes
     salt: bytes
 
 
@@ -87,15 +87,15 @@ class Auth2Message(DataclassMessage, Message):
 class Auth3Message(DataclassMessage, Message):
     type_str = "auth3"
 
-    ka_c1: bytes
-    c2: bytes
+    resp_1: bytes
+    challenge_2: bytes
 
 
 @dataclass
 class Auth4Message(DataclassMessage, Message):
     type_str = "auth4"
 
-    ka_c2: bytes
+    resp_2: bytes
 
 @dataclass
 class PeerPortMessage(DataclassMessage, Message):
@@ -133,58 +133,58 @@ class EncryptedMessage(DataclassMessage, Message):
 class PeerAuth1Message(DataclassMessage, Message):
     type_str = "pauth1"
 
-    n_c: int
-    a: str
-    b: str
-    k_a1: bytes
+    n_common: int
+    sender: str
+    receiver: str
+    auth_sender: bytes
 
 
 @dataclass
 class PeerAuth2Message(DataclassMessage, Message):
     type_str = "pauth2"
 
-    a: str
-    b: str
-    k_a1: bytes
-    k_b1: bytes
+    sender: str
+    receiver: str
+    auth_sender: bytes
+    auth_receiver: bytes
 
 
 @dataclass
 class PeerAuth3Message(DataclassMessage, Message):
     type_str = "pauth3"
 
-    n_c: int
-    k_a2: bytes
-    k_b2: bytes
+    n_common: int
+    sender_session: bytes
+    receiver_session: bytes
 
 
 @dataclass
 class PeerAuth4Message(DataclassMessage, Message):
     type_str = "pauth4"
 
-    k_a2: bytes
+    sender_session: bytes
 
 
 @dataclass
 class PeerAuth5Message(DataclassMessage, Message):
     type_str = "pauth5"
 
-    k_abmsg: bytes
+    cipher: bytes
 
 
 @dataclass
 class AuthReqMessage(DataclassMessage, Message):
     type_str = "authr"
 
-    n_1: int
-    n_2: int
-    a: str
-    b: str
+    n_client: int
+    n_common: int
+    sender: str
+    reciever: str
 
 
 @dataclass
 class AuthTicketMessage(DataclassMessage, Message):
     type_str = "autht"
 
-    n_1: int
-    k_ab: bytes
+    n_client: int
+    session_key: bytes

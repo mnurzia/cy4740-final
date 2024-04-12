@@ -23,59 +23,65 @@ class Server(Node):
         try:
             auth1: Auth1Message = await self.receive_msg(reader)
             assert isinstance(auth1, Auth1Message)
-            b = int.from_bytes(os.urandom(2048 // 8), "big")
+            receiver = int.from_bytes(os.urandom(2048 // 8), "big")
             salt, f_w = self.pdb[auth1.identity]
             f_w = int.from_bytes(f_w, "big")
-            g_bfw = (pow(G, b, P) + pow(G, f_w, P)) % P
+            g_bfw = (pow(G, receiver, P) + pow(G, f_w, P)) % P
             u = int.from_bytes(os.urandom(2048 // 8), "big")
             c1 = os.urandom(2048 // 8)
             self.send_msg(
                 writer,
                 Auth2Message(g_bfw, u, c1, salt),
             )
-            k_a = hkdf((pow(auth1.dh, b, P) * pow(pow(G, f_w, P), b * u, P)) % P)
+            client_key = hkdf((pow(auth1.dh_mask, receiver, P) * pow(pow(G, f_w, P), receiver * u, P)) % P)
             auth3: Auth3Message = await self.receive_msg(reader)
             assert isinstance(auth3, Auth3Message)
-            assert ad(k_a, auth3.ka_c1) == c1
-            self.send_msg(writer, Auth4Message(ae(k_a, auth3.c2)))
-
+            assert ad(client_key, auth3.resp_1) == c1
+            self.send_msg(writer, Auth4Message(ae(client_key, auth3.challenge_2)))
+            client_port: PeerPortMessage = await self.receive_msg_encrypted(reader, )
+            # TODO: include the port number of the client into the server data
             self.clients[identity := auth1.identity] = writer.get_extra_info("peername")
-            self.keys[identity] = k_a
+            self.keys[identity] = client_key
             self.logger.info(f"Authenticated to client {identity}")
 
-            while (message := await self.receive_msg_encrypted(reader, k_a)) != None:
+            while (message := await self.receive_msg_encrypted(reader, client_key)) != None:
                 match message:
                     case ClientsRequestMessage():
                         self.send_msg_encrypted(
-                            writer, ClientsResponseMessage(self.clients), k_a
+                            writer, ClientsResponseMessage(self.clients), client_key
                         )
-                    case PeerAuth2Message(a, b, k_a1, k_b1):
-                        a1: AuthReqMessage = Message.unpack(k_a1).decrypt(self.keys[a])
-                        assert isinstance(a1, AuthReqMessage)
-                        assert a1.a == a and a1.b == b
-                        b1: AuthReqMessage = Message.unpack(k_b1).decrypt(self.keys[b])
-                        assert isinstance(b1, AuthReqMessage)
-                        assert b1.a == a and b1.b == b
-                        assert a1.n_2 == b1.n_2
-                        k_ab: bytes = os.urandom(32)
+                    
+                    # as a note, the 
+                    case PeerAuth2Message(sender, receiver, cipher_sender, cipher_receiver):
+                        auth_sender: AuthReqMessage = Message.unpack(cipher_sender).decrypt(self.keys[sender])
+                        assert isinstance(auth_sender, AuthReqMessage)
+                        assert auth_sender.sender == sender and auth_sender.reciever == receiver
+
+                        auth_receiver: AuthReqMessage = Message.unpack(cipher_receiver).decrypt(self.keys[receiver])
+                        assert isinstance(auth_receiver, AuthReqMessage)
+                        assert auth_receiver.sender == sender and auth_receiver.reciever == receiver
+                        
+                        assert auth_sender.n_common == auth_receiver.n_common
+
+                        k_shared: bytes = os.urandom(32)
                         self.send_msg_encrypted(
                             writer,
                             PeerAuth3Message(
-                                a1.n_2,
+                                auth_sender.n_common,
                                 Message.pack(
                                     EncryptedMessage.encrypt(
-                                        self.keys[a],
-                                        AuthTicketMessage(a1.n_1, k_ab),
+                                        self.keys[sender],
+                                        AuthTicketMessage(auth_sender.n_client, k_shared),
                                     )
                                 ),
                                 EncryptedMessage.pack(
                                     EncryptedMessage.encrypt(
-                                        self.keys[b],
-                                        AuthTicketMessage(b1.n_1, k_ab),
+                                        self.keys[receiver],
+                                        AuthTicketMessage(auth_receiver.n_client, k_shared),
                                     )
                                 ),
                             ),
-                            k_a,
+                            client_key,
                         )
                     case _:
                         raise Exception("unexpected message: ", repr(message))
