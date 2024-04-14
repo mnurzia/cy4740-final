@@ -9,6 +9,9 @@ class Node:
     def __init__(self, name: str):
         self.logger = logging.getLogger(name)
 
+    async def start(self, *args):
+        pass
+
     def send_msg(self, writer: asyncio.StreamWriter, message: Message):
         writer.write(Message.pack(message))
 
@@ -30,3 +33,6 @@ class Node:
         msg: EncryptedMessage = await self.receive_msg(reader)
         assert isinstance(msg, EncryptedMessage)
         return msg.decrypt(key)
+    
+    async def finish(self):
+        pass

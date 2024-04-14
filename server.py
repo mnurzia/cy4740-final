@@ -15,8 +15,8 @@ class Server(Node):
         self.keys = {}
         self.pdb = load_pdb(pdb)
 
-    async def start(self) -> asyncio.Server:
-        return await self.server
+    async def start(self, *args) -> asyncio.Server:
+        return await (await self.server).serve_forever()
 
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         identity: Optional[str] = None
@@ -38,9 +38,10 @@ class Server(Node):
             assert isinstance(auth3, Auth3Message)
             assert ad(client_key, auth3.resp_1) == c1
             self.send_msg(writer, Auth4Message(ae(client_key, auth3.challenge_2)))
-            client_port: PeerPortMessage = await self.receive_msg_encrypted(reader, )
-            # TODO: include the port number of the client into the server data
-            self.clients[identity := auth1.identity] = writer.get_extra_info("peername")
+            client_port_msg: PeerPortMessage = await self.receive_msg_encrypted(reader, client_key)
+            assert isinstance(client_port_msg, PeerPortMessage)
+            client_ip = writer.get_extra_info("peername")[0]
+            self.clients[identity := auth1.identity] = f"{client_ip}:{client_port_msg.peer_port}"
             self.keys[identity] = client_key
             self.logger.info(f"Authenticated to client {identity}")
 
@@ -90,3 +91,6 @@ class Server(Node):
         if identity:
             del self.clients[identity]
             del self.keys[identity]
+
+    async def finish(self):
+        self.server.close()

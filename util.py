@@ -13,7 +13,6 @@ P = 0x87A8E61DB4B6663CFFBBD19C651959998CEEF608660DD0F25D2CEED4435E3B00E00DF8F1D6
 
 PASS = {"A": 22, "B": 44}
 
-
 def scrypt(salt: bytes, pwd: bytes) -> bytes:
     kdf = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1)
     return kdf.derive(pwd)
