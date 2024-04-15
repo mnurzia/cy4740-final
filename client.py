@@ -124,34 +124,14 @@ class Client(Node):
 
         try:
             while True:
-                evts = [
-                    (rdl := asyncio.create_task(self.stdin.readuntil(b"\n"))),
-                    (msg := asyncio.create_task(self.receive_msg(self.server_reader))),
-                ]
-                for evt in asyncio.as_completed(evts):
-                    try:
-                        evt = await evt
-                        if isinstance(evt, bytes):
-                            msg.cancel()
-                            cmd = evt
-                            if cmd == b"":
-                                self.send_msg_encrypted(
-                                    self.server_writer, LogoutMessage(), self.client_key
-                                )
-                            evts.append(self.stdin.readuntil(b"\n"))
-                        elif isinstance(evt, Message):
-                            rdl.cancel()
-                            if isinstance(evt, LogoutMessage):
-                                self.logger.info("Server closing")
-                                cmd = b""
-                                break
-                    except asyncio.IncompleteReadError:
-                        self.logger.info("Server closing")
-                        cmd = b""
-                        rdl.cancel()
-                        msg.cancel()
-
+                try:
+                    cmd = await asyncio.wait_for(self.stdin.readline(), timeout=1)
+                except TimeoutError:
+                    continue
                 if cmd == b"":
+                    self.send_msg_encrypted(
+                        self.server_writer, LogoutMessage(), self.client_key
+                    )
                     break
                 match cmd.decode().strip("\n").split():
                     case ["list"]:
