@@ -48,6 +48,7 @@ class Client(Node):
         self, peer_reader: asyncio.StreamReader, peer_writer: asyncio.StreamWriter
     ):
         try:
+            # Receieved communication initiation from another client
             peer_init_comm: PeerAuth1Message = await self.receive_msg(peer_reader)
             assert isinstance(peer_init_comm, PeerAuth1Message)
             n_receiver = int.from_bytes(os.urandom(16), "big")
@@ -72,6 +73,7 @@ class Client(Node):
                 self.client_key,
             )
 
+            # Authentication of the initiator and setup of a session key
             session_keys: PeerAuth3Message = await self.receive_msg_encrypted(
                 self.server_reader, self.client_key
             )
@@ -89,6 +91,7 @@ class Client(Node):
 
             self.send_msg(peer_writer, PeerAuth4Message(session_keys.sender_session))
 
+            # The receipt of the actual message
             peer_cipher: PeerAuth5Message = await self.receive_msg(peer_reader)
             assert isinstance(peer_cipher, PeerAuth5Message)
 
@@ -105,9 +108,11 @@ class Client(Node):
     The asynchronous handling of interaction with the server and other clients post with authentication
     '''
     async def _server(self):
+        # The actual creation of the communication to a server
         self.server_reader, self.server_writer = await asyncio.open_connection(
             str(self.host.address), self.host.port
         )
+        # The initiation of mutual authentication to the server
         a = int.from_bytes(os.urandom(2048 // 8), "big")
         self.send_msg(self.server_writer, Auth1Message(self.me, pow(G, a, P)))
         auth2: Auth2Message = await self.receive_msg(self.server_reader)
@@ -123,6 +128,8 @@ class Client(Node):
         auth4: Auth4Message = await self.receive_msg(self.server_reader)
         assert isinstance(auth4, Auth4Message)
         assert ad(client_key, auth4.resp_2) == c2
+
+        # Post mutual authentication to notify the server of the listening port of the client
         self.send_msg_encrypted(
             self.server_writer, PeerPortMessage(self.port), client_key
         )
@@ -132,6 +139,7 @@ class Client(Node):
         self.stdin = await self.connect_stdin()
 
         try:
+            # The setup of interaction with the stdin and the server
             while True:
                 try:
                     cmd = await asyncio.wait_for(self.stdin.readline(), timeout=1)
@@ -144,10 +152,12 @@ class Client(Node):
                     break
                 match cmd.decode().strip("\n").split():
                     case ["list"]:
+                        # The request to a server for the list of clients
                         await self._update_clients()
                         for user, host in self.clients.items():
                             print(user, "-", host)
                     case ["send", peer, *msg]:
+                        # An initiation to begin communication with another client
                         await self._update_clients()
                         if peer not in self.clients:
                             raise Exception(f"peer not found: {peer}")
@@ -173,14 +183,17 @@ class Client(Node):
                                 ),
                             ),
                         )
+                        # The receipt of a session key between this client and the other client
                         pauth4: PeerAuth4Message = await self.receive_msg(peer_read)
                         assert isinstance(pauth4, PeerAuth4Message)
-                        tick_a: AuthTicketMessage = Message.unpack(
+                        tick_sender: AuthTicketMessage = Message.unpack(
                             pauth4.sender_session
                         ).decrypt(self.client_key)
-                        assert isinstance(tick_a, AuthTicketMessage)
-                        assert tick_a.n_client == n_sender
-                        k_ab = tick_a.session_key
+                        assert isinstance(tick_sender, AuthTicketMessage)
+                        assert tick_sender.n_client == n_sender
+                        k_ab = tick_sender.session_key
+                        
+                        # The actual sending of the message
                         self.send_msg(
                             peer_write,
                             PeerAuth5Message(ae(k_ab, " ".join(msg).encode())),
