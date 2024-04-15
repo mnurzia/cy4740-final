@@ -6,9 +6,11 @@ from node import *
 import random
 import signal
 
-'''
+"""
 A client endpoint for the application
-'''
+"""
+
+
 class Client(Node):
     def __init__(self, host: Host, id: str, pwd: str):
         super().__init__("client")
@@ -23,9 +25,10 @@ class Client(Node):
         self.stdin: asyncio.StreamReader = None
         self.logger.debug(f"Username: {self.me}")
 
-    '''
+    """
     Starts asynchronous stdin to allow for constant client input
-    '''
+    """
+
     async def connect_stdin(self) -> asyncio.StreamReader:
         loop = asyncio.get_event_loop()
         reader = asyncio.StreamReader()
@@ -41,9 +44,10 @@ class Client(Node):
         except asyncio.CancelledError:
             pass
 
-    '''
+    """
     The asynchronous handling of a recieved client message post client-to-client authentication
-    '''
+    """
+
     async def _peer(
         self, peer_reader: asyncio.StreamReader, peer_writer: asyncio.StreamWriter
     ):
@@ -96,7 +100,7 @@ class Client(Node):
             assert isinstance(peer_cipher, PeerAuth5Message)
 
             print(
-                f"message from {peer_init_comm.sender}: {ad(session_key, peer_cipher.cipher).decode()}"
+                f"message from {peer_init_comm.sender}: {auth_decrypt(session_key, peer_cipher.cipher).decode()}"
             )
 
             peer_writer.close()
@@ -104,9 +108,10 @@ class Client(Node):
         except Exception as e:
             self.logger.exception(e)
 
-    '''
+    """
     The asynchronous handling of interaction with the server and other clients post with authentication
-    '''
+    """
+
     async def _server(self):
         # The actual creation of the communication to a server
         self.server_reader, self.server_writer = await asyncio.open_connection(
@@ -123,13 +128,15 @@ class Client(Node):
         client_key = hkdf(pow(g_b, a + auth2.nonce * pw_hash, P))
         c2 = os.urandom(2048 // 8)
         self.send_msg(
-            self.server_writer, Auth3Message(ae(client_key, auth2.challenge_1), c2)
+            self.server_writer,
+            Auth3Message(auth_encrypt(client_key, auth2.challenge_1), c2),
         )
         auth4: Auth4Message = await self.receive_msg(self.server_reader)
         assert isinstance(auth4, Auth4Message)
-        assert ad(client_key, auth4.resp_2) == c2
+        assert auth_decrypt(client_key, auth4.resp_2) == c2
 
         # Post mutual authentication to notify the server of the listening port of the client
+
         self.send_msg_encrypted(
             self.server_writer, PeerPortMessage(self.port), client_key
         )
@@ -196,7 +203,9 @@ class Client(Node):
                         # The actual sending of the message
                         self.send_msg(
                             peer_write,
-                            PeerAuth5Message(ae(k_ab, " ".join(msg).encode())),
+                            PeerAuth5Message(
+                                auth_encrypt(k_ab, " ".join(msg).encode())
+                            ),
                         )
                     case _:
                         raise Exception(f"unexpected command: {cmd!r}")
@@ -205,9 +214,10 @@ class Client(Node):
         self.server_writer.write_eof()
         self.peer.close()
 
-    '''
+    """
     Asynchronously updates the local table of active clients
-    '''
+    """
+
     async def _update_clients(self):
         self.send_msg_encrypted(
             self.server_writer, ClientsRequestMessage(), self.client_key
