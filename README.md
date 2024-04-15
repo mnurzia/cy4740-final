@@ -4,6 +4,8 @@ By: Max Nurzia and William Liu
 ## Details
 This is a secure chat application that utilizes a combination of SRP (to mutually authenticate clients to the server) and Otway-Rees (to leverage an authenticated server to mutually authenticate clients to each other).
 
+[More Information on the Protocol](https://docs.google.com/presentation/d/13a9pzWd8g1uTYHiGqeNUbgshdO1-oOgH0gNdSAW6ukk/edit?usp=sharing)
+
 ## Dependencies
 - cryptography library
 
