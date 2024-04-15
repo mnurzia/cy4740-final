@@ -5,9 +5,11 @@ from util import *
 from message import *
 from node import *
 
-'''
+"""
 A server endpoint in the application
-'''
+"""
+
+
 class Server(Node):
     def __init__(self, host: Host, pdb: str):
         super().__init__("server")
@@ -22,9 +24,10 @@ class Server(Node):
         self.server = await self.server
         return await self.server.serve_forever()
 
-    '''
+    """
     The asynchronous handling of incoming clients and their continued communication until they log off
-    '''
+    """
+
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         identity: Optional[str] = None
         try:
@@ -47,8 +50,10 @@ class Server(Node):
             )
             auth3: Auth3Message = await self.receive_msg(reader)
             assert isinstance(auth3, Auth3Message)
-            assert ad(client_key, auth3.resp_1) == c1
-            self.send_msg(writer, Auth4Message(ae(client_key, auth3.challenge_2)))
+            assert auth_decrypt(client_key, auth3.resp_1) == c1
+            self.send_msg(
+                writer, Auth4Message(auth_encrypt(client_key, auth3.challenge_2))
+            )
 
             # Post Authentication and receiving of a listening port for the client
             client_port_msg: PeerPortMessage = await self.receive_msg_encrypted(

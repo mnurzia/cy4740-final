@@ -13,6 +13,7 @@ P = 0x87A8E61DB4B6663CFFBBD19C651959998CEEF608660DD0F25D2CEED4435E3B00E00DF8F1D6
 
 PASS = {"A": 22, "B": 44}
 
+
 def scrypt(salt: bytes, pwd: bytes) -> bytes:
     kdf = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1)
     return kdf.derive(pwd)
@@ -24,13 +25,13 @@ def hkdf(n: int) -> bytes:
     ).derive(n.to_bytes(2048, "big"))
 
 
-def ae(k: bytes, p: bytes) -> bytes:
+def auth_encrypt(k: bytes, p: bytes) -> bytes:
     aesgcm = AESGCM(k)
     nonce = os.urandom(12)
     return nonce + aesgcm.encrypt(nonce, p, None)
 
 
-def ad(k: bytes, nc: bytes) -> bytes:
+def auth_decrypt(k: bytes, nc: bytes) -> bytes:
     aesgcm = AESGCM(k)
     nonce, ciphertext = nc[:12], nc[12:]
     return aesgcm.decrypt(nonce, ciphertext, None)
