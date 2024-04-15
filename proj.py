@@ -17,21 +17,24 @@ from server import *
 from passdb import *
 import signal
 
+'''
+Sets up the handling for all nodes
+'''
+async def handle(node):
+    await node.finish()
 
-async def handle(host):
-    await host.finish()
-
-
-def setup_handling(host):
+'''
+Sets up the handling for signals
+'''
+def setup_handling(node):
     asyncio.get_event_loop().add_signal_handler(
-        signal.SIGINT, lambda: asyncio.create_task(handle(host))
+        signal.SIGINT, lambda: asyncio.create_task(handle(node))
     )
 
 
 """
 Starts up a client user
 """
-
 
 async def client_main(args):
     return Client(Host(args.server_ip, args.server_port), args.id, args.pwd)
@@ -40,24 +43,21 @@ async def client_main(args):
 """
 Starts up a server
 """
-
-
 async def server_main(args):
     return Server(Host(args.ip, args.port), args.pdb)
 
-
+'''
+Preps a node's signal handling before starting
+'''
 async def node_main(args):
     node: Node = await args.node_func(args)
     setup_handling(node)
 
     await node.start()
 
-
 """
 Adds a new username and password to the specified password database
 """
-
-
 async def pdb_main(args):
     pdb = load_pdb(args.pdb)
     salt = os.urandom(16)
