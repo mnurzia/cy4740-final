@@ -5,9 +5,10 @@ from util import *
 from message import *
 from node import *
 
-
+'''
+A server endpoint in the application
+'''
 class Server(Node):
-
     def __init__(self, host: Host, pdb: str):
         super().__init__("server")
         self.server: asyncio.Server = asyncio.start_server(
@@ -21,9 +22,13 @@ class Server(Node):
         self.server = await self.server
         return await self.server.serve_forever()
 
+    '''
+    The asynchronous handling of incoming clients and their continued communication until they log off
+    '''
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         identity: Optional[str] = None
         try:
+            # Client/Server Authentication
             auth1: Auth1Message = await self.receive_msg(reader)
             assert isinstance(auth1, Auth1Message)
             receiver = int.from_bytes(os.urandom(2048 // 8), "big")
@@ -44,6 +49,8 @@ class Server(Node):
             assert isinstance(auth3, Auth3Message)
             assert ad(client_key, auth3.resp_1) == c1
             self.send_msg(writer, Auth4Message(ae(client_key, auth3.challenge_2)))
+
+            # Post Authentication and receiving of a listening port for the client
             client_port_msg: PeerPortMessage = await self.receive_msg_encrypted(
                 reader, client_key
             )
@@ -56,17 +63,20 @@ class Server(Node):
             self.keys[identity] = client_key
             self.logger.info(f"Authenticated to client {identity}")
 
+            # The listening for communication from a client
             while (
                 message := await self.receive_msg_encrypted(reader, client_key)
             ) != None:
                 match message:
                     case ClientsRequestMessage():
+                        # The request for the list of logged on users from a client
                         self.send_msg_encrypted(
                             writer, ClientsResponseMessage(self.clients), client_key
                         )
                     case PeerAuth2Message(
                         sender, receiver, cipher_sender, cipher_receiver
                     ):
+                        # The authentication of an initiating client
                         auth_sender: AuthReqMessage = Message.unpack(
                             cipher_sender
                         ).decrypt(self.keys[sender])
@@ -85,6 +95,7 @@ class Server(Node):
                             and auth_receiver.reciever == receiver
                         )
 
+                        # The creation of a common key post authentication that the communication thus far is secure
                         assert auth_sender.n_common == auth_receiver.n_common
                         k_shared: bytes = os.urandom(32)
                         self.send_msg_encrypted(
@@ -111,6 +122,7 @@ class Server(Node):
                             client_key,
                         )
                     case LogoutMessage():
+                        # The handling of a log out request from a client
                         self.logger.info(f"Client {identity} logged out")
                         writer.close()
                         break
