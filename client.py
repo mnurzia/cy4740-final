@@ -6,9 +6,9 @@ from node import *
 import random
 import signal
 
-PORT = 25154
-
-
+'''
+A client endpoint for the application
+'''
 class Client(Node):
     def __init__(self, host: Host, id: str, pwd: str):
         super().__init__("client")
@@ -23,6 +23,9 @@ class Client(Node):
         self.stdin: asyncio.StreamReader = None
         self.logger.debug(f"Username: {self.me}")
 
+    '''
+    Starts asynchronous stdin to allow for constant client input
+    '''
     async def connect_stdin(self) -> asyncio.StreamReader:
         loop = asyncio.get_event_loop()
         reader = asyncio.StreamReader()
@@ -38,6 +41,9 @@ class Client(Node):
         except asyncio.CancelledError:
             pass
 
+    '''
+    The asynchronous handling of a recieved client message post client-to-client authentication
+    '''
     async def _peer(
         self, peer_reader: asyncio.StreamReader, peer_writer: asyncio.StreamWriter
     ):
@@ -95,6 +101,9 @@ class Client(Node):
         except Exception as e:
             self.logger.exception(e)
 
+    '''
+    The asynchronous handling of interaction with the server and other clients post with authentication
+    '''
     async def _server(self):
         self.server_reader, self.server_writer = await asyncio.open_connection(
             str(self.host.address), self.host.port
@@ -183,6 +192,9 @@ class Client(Node):
         self.server_writer.write_eof()
         self.peer.close()
 
+    '''
+    Asynchronously updates the local table of active clients
+    '''
     async def _update_clients(self):
         self.send_msg_encrypted(
             self.server_writer, ClientsRequestMessage(), self.client_key
