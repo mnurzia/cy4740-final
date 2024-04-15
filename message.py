@@ -97,11 +97,16 @@ class Auth4Message(DataclassMessage, Message):
 
     resp_2: bytes
 
+
 @dataclass
 class PeerPortMessage(DataclassMessage, Message):
     type_str = "peerport"
 
     peer_port: int
+
+
+class LogoutMessage(Message):
+    type_str = "logout"
 
 
 class ClientsRequestMessage(Message):
